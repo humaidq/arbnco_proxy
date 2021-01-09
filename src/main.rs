@@ -60,4 +60,8 @@ fn get_sensor_data() -> Result<SensorDataResult, String> {
 
 fn main() {
     let cfg: ProxyConfig = confy::load_path(Path::new("./config.toml")).unwrap();
+    if cfg.authentication_key == ProxyConfig::default().authentication_key {
+        println!("Please add the authentication (API) key in the configuration file (config.toml), and run again.");
+        return;
+    }
 }
