@@ -7,6 +7,7 @@ extern crate passwords;
 extern crate cached;
 extern crate actix_web;
 
+use std::collections::HashMap;
 use actix_web::dev::ServiceRequest;
 use actix_web_httpauth::extractors::basic::BasicAuth;
 use std::io::{Error, ErrorKind};
@@ -43,16 +44,17 @@ impl Default for ProxyConfig {
     }
 }
 
-/// The ARBNCO data structure for deserialisation.
-#[derive(Debug, Deserialize)]
-struct SensorDataResponse {
-
-}
-
 /// The sensor data result structure for returning to openHAB.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct SensorDataResult {
-
+    temperature: f64,
+    humidity: f64,
+    co2: f64,
+    ambient_light_sensor: f64,
+    total_volatile_organic_compounds: f64,
+    particulate_matter: f64,
+    particulate_matter_25: f64,
+    particulate_matter_10: f64,
 }
 
 /// Returns the sensor data. This function is cached.
@@ -61,13 +63,32 @@ struct SensorDataResult {
 /// to 10/min or 600/hr"
 #[cached(time=25)]
 fn get_sensor_data() -> Result<SensorDataResult, String> {
-    let request_url = format!("well.arbnco.com/api/v1/sites/{site_id}/readings/data_range",
-                              site_id = "0");
+    let request_url = format!("https://well.arbnco.com/api/v1/sites/{site_id}/readings",
+                              site_id = CFG.site_id);
 
-    let response = reqwest::blocking::get(&request_url);
+    let client = reqwest::blocking::Client::new();
+    let response = client.get(&request_url).header("Authorization", &CFG.authentication_key).send();
 
     match response {
-        Ok(resp) => {Ok(SensorDataResult{})},
+        Ok(resp) => {
+            let deserialised: SensorDataResponse = serde_json::from_str(resp
+                .text().unwrap().as_str()).unwrap();
+            dbg!(&deserialised.data_range.maximum_date);
+            dbg!(deserialised.data.len());
+            let latest = deserialised.data.get(&deserialised.data_range.maximum_date).unwrap();
+
+            let data: SensorDataResult = SensorDataResult{
+                temperature: latest.temperature.med.unwrap_or(-99.0),
+                humidity: latest.humidity.med.unwrap_or(-99.0),
+                co2: latest.co2.med.unwrap_or(-99.0),
+                ambient_light_sensor: latest.als.med.unwrap_or(-99.0),
+                total_volatile_organic_compounds: latest.tvoc.med.unwrap_or(-99.0),
+                particulate_matter: latest.pm.med.unwrap_or(-99.0),
+                particulate_matter_10: latest.pm10.med.unwrap_or(-99.0),
+                particulate_matter_25: latest.pm25.med.unwrap_or(-99.0),
+            };
+            Ok(data)
+        },
         Err(err) => Err(format!("Response error: {}", err)),
     }
 }
@@ -99,6 +120,9 @@ async fn main() -> std::io::Result<()> {
         std::process::exit(1);
     }
 
+    let resp = get_sensor_data().unwrap();
+    println!("{:#?}", resp);
+
     HttpServer::new(|| {
         let auth = HttpAuthentication::basic(validator);
         App::new()
@@ -113,4 +137,77 @@ async fn main() -> std::io::Result<()> {
 async fn greet(req: HttpRequest) -> impl Responder {
     let name = req.match_info().get("name").unwrap_or("World");
     format!("Hello {}!", &name)
+}
+
+
+#[derive(Serialize, Deserialize)]
+pub struct SensorDataResponse {
+    #[serde(rename = "total_records")]
+    total_records: i64,
+
+    #[serde(rename = "page_size")]
+    page_size: i64,
+
+    #[serde(rename = "page")]
+    page: i64,
+
+    #[serde(rename = "total_pages")]
+    total_pages: i64,
+
+    #[serde(rename = "data_range")]
+    data_range: DataRange,
+
+    #[serde(rename = "data")]
+    data: HashMap<String, Datum>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Datum {
+    #[serde(rename = "count")]
+    count: i64,
+
+    #[serde(rename = "temperature")]
+    temperature: Stats,
+
+    #[serde(rename = "humidity")]
+    humidity: Stats,
+
+    #[serde(rename = "co2")]
+    co2: Stats,
+
+    #[serde(rename = "als")]
+    als: Stats,
+
+    #[serde(rename = "tvoc")]
+    tvoc: Stats,
+
+    #[serde(rename = "pm")]
+    pm: Stats,
+
+    #[serde(rename = "pm25")]
+    pm25: Stats,
+
+    #[serde(rename = "pm10")]
+    pm10: Stats,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Stats {
+    #[serde(rename = "min")]
+    min: Option<f64>,
+
+    #[serde(rename = "med")]
+    med: Option<f64>,
+
+    #[serde(rename = "max")]
+    max: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DataRange {
+    #[serde(rename = "minimum_date")]
+    minimum_date: String,
+
+    #[serde(rename = "maximum_date")]
+    maximum_date: String,
 }
