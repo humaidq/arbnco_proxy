@@ -5,15 +5,23 @@ extern crate serde_json;
 extern crate confy;
 extern crate passwords;
 extern crate cached;
+extern crate actix_web;
 
+use actix_web::dev::ServiceRequest;
+use actix_web_httpauth::extractors::basic::BasicAuth;
+use std::io::{Error, ErrorKind};
+use actix_web_httpauth::middleware::HttpAuthentication;
+use actix_web::{web, App, HttpRequest, HttpServer, Responder};
 use cached::proc_macro::cached;
 use std::path::Path;
 use passwords::PasswordGenerator;
 use serde_derive::{Serialize, Deserialize};
+use lazy_static::lazy_static;
 
+/// The configuration file structure for the proxy.
 #[derive(Debug, Serialize, Deserialize)]
 struct ProxyConfig {
-    port: i64,
+    port: u16,
     authentication_key: String,
     site_id: String,
     http_auth_username: String,
@@ -35,6 +43,13 @@ impl Default for ProxyConfig {
     }
 }
 
+/// The ARBNCO data structure for deserialisation.
+#[derive(Debug, Deserialize)]
+struct SensorDataResponse {
+
+}
+
+/// The sensor data result structure for returning to openHAB.
 #[derive(Clone)]
 struct SensorDataResult {
 
@@ -57,11 +72,45 @@ fn get_sensor_data() -> Result<SensorDataResult, String> {
     }
 }
 
+lazy_static! {
+    /// Lazily load the global (static) configuration file.
+    static ref CFG: ProxyConfig = confy::load_path(Path::new("./config.toml")).unwrap();
+}
 
-fn main() {
-    let cfg: ProxyConfig = confy::load_path(Path::new("./config.toml")).unwrap();
-    if cfg.authentication_key == ProxyConfig::default().authentication_key {
+/// Validator function for HTTP Authentication
+async fn validator(
+    req: ServiceRequest,
+    cred: BasicAuth,
+) -> Result<ServiceRequest, actix_web::Error> {
+        let uid = cred.user_id();
+        let pass = cred.password();
+        if uid == CFG.http_auth_username.as_str() &&
+            pass.is_some() &&
+            pass.unwrap() == CFG.http_auth_password.as_str() {
+            return Ok(req);
+        }
+        return Err(actix_web::Error::from(Error::new(ErrorKind::PermissionDenied, "Invalid credentials")))
+}
+
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    if CFG.authentication_key == ProxyConfig::default().authentication_key {
         println!("Please add the authentication (API) key in the configuration file (config.toml), and run again.");
-        return;
+        std::process::exit(1);
     }
+
+    HttpServer::new(|| {
+        let auth = HttpAuthentication::basic(validator);
+        App::new()
+            .wrap(auth)
+            .route("/", web::get().to(greet))
+    })
+    .bind(("127.0.0.1", CFG.port))?
+    .run()
+    .await
+}
+
+async fn greet(req: HttpRequest) -> impl Responder {
+    let name = req.match_info().get("name").unwrap_or("World");
+    format!("Hello {}!", &name)
 }
