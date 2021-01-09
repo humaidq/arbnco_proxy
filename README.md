@@ -8,10 +8,12 @@ This proxy also caches results as not to hit the API call limit.
 A configuration file will automatically be generated in the current working
 directory, named `config.toml`.
 
-## Requirements
+## Build Requirements
 
-You'll need to have [Rust] installed on your system. This has been tested with
-the nightly build.
+This program doesn't have dependencies to run.
+
+To build from source, you'll need to have [Rust] installed on your system. This
+has been tested with the nightly build.
 
 You also need `git` to clone this repository.
 
